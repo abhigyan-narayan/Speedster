@@ -1,0 +1,41 @@
+{
+  "manifest_version": 2,
+  "name": "Speedster",
+  "version": "1.3",
+  "description": "Control media playback speed with keyboard shortcuts allowing unlimited speed.",
+  "permissions": ["activeTab", "<all_urls>", "storage"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "commands": {
+    "increase-speed": {
+      "suggested_key": {
+        "default": "Alt+W"
+      },
+      "description": "Increase playback speed"
+    },
+    "decrease-speed": {
+      "suggested_key": {
+        "default": "Alt+X"
+      },
+      "description": "Decrease playback speed"
+    },
+    "reset-speed": {
+      "suggested_key": {
+        "default": "Alt+Z"
+      },
+      "description": "Reset or toggle last speed"
+    }
+  },
+  "icons": {
+    "48": "icon48.png",
+    "96": "icon96.png"
+  }
+}
+
