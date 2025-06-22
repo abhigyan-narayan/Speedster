@@ -49,18 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         updatePopupUI(response.currentSpeed, response.isEnabledForSite);
     } else {
         // Fallback or error state for UI if content script doesn't respond
-        updatePopupUI(1.0, true); // Assume default 1.0x and enabled
-    }
-
-    // Event listener for Increase button
-    const increaseBtn = document.getElementById('increaseBtn');
-    if (increaseBtn) {
-        increaseBtn.addEventListener('click', async () => {
-            const response = await sendMessageToContentScript({ type: "increase-speed" });
-            if (response) {
-                updatePopupUI(response.currentSpeed, response.isEnabledForSite);
-            }
-        });
+        // updatePopupUI(1.0, true); // Assume default 1.0x and enabled
     }
 
     // Event listener for Decrease button
@@ -68,6 +57,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (decreaseBtn) {
         decreaseBtn.addEventListener('click', async () => {
             const response = await sendMessageToContentScript({ type: "decrease-speed" });
+            if (response) {
+                updatePopupUI(response.currentSpeed, response.isEnabledForSite);
+            }
+        });
+    }
+
+    // Event listener for Reset button (NEW)
+    const resetBtn = document.getElementById('resetBtn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', async () => {
+            const response = await sendMessageToContentScript({ type: "reset-speed" });
+            if (response) {
+                updatePopupUI(response.currentSpeed, response.isEnabledForSite);
+            }
+        });
+    }
+
+    // Event listener for Increase button
+    const increaseBtn = document.getElementById('increaseBtn');
+    if (increaseBtn) {
+        increaseBtn.addEventListener('click', async () => {
+            const response = await sendMessageToContentScript({ type: "increase-speed" });
             if (response) {
                 updatePopupUI(response.currentSpeed, response.isEnabledForSite);
             }
@@ -85,4 +96,3 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 });
-
