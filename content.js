@@ -1,237 +1,310 @@
 let currentSpeed = 1.0;
 let lastSpeed = 1.0;
 let overlay = null;
-let lastKnownUrl = location.href; // Keep track of the last known URL for mutation observer
-let applySpeedDebouncedTimeout = null; // Timeout ID for debounced function
-let isExtensionEnabledForSite = true; // Global flag: true by default, updated by storage
+let lastKnownUrl = location.href;
+let applySpeedDebouncedTimeout = null;
+let showOverlayDebounceTimeout = null;
+let isExtensionEnabledForSite = true;
+const isTopFrame = (window.self === window.top); // Determine if this script is in the top-level frame
 
 /**
  * Displays a temporary overlay on the screen showing the current playback speed.
+ * This function is now debounced internally to prevent flickering and only shows if user initiated.
  * @param {number} speed The current playback speed to display.
+ * @param {boolean} isUserInitiated True if the speed change was initiated by user action.
  */
-function showOverlay(speed) {
-  // If an overlay already exists and is still in the DOM, clear its timeout and remove it.
-  // This ensures a fresh overlay is created for each display, preventing lingering issues.
-  if (overlay && overlay.parentNode) {
-    clearTimeout(overlay._timeout);
-    document.body.removeChild(overlay);
-    overlay = null; // Reset the overlay reference
-  }
-
-  // Create the new overlay element
-  overlay = document.createElement('div');
-  overlay.style.position = 'fixed'; // Position relative to the viewport
-  overlay.style.top = '80px'; // Adjusted further down
-  overlay.style.left = '50px'; // Slightly shifted to the right
-  overlay.style.background = 'rgba(0, 0, 0, 0.7)'; // Semi-transparent black background
-  overlay.style.color = 'white'; // White text color
-  overlay.style.padding = '12px 18px'; // Padding around the text
-  overlay.style.fontSize = '24px'; // Larger font
-  overlay.style.fontWeight = 'bold'; // Bold text
-  overlay.style.borderRadius = '8px'; // Rounded corners
-  overlay.style.zIndex = '9999'; // Ensure it's on top of most page content
-  overlay.textContent = `${speed.toFixed(2)}x`; // Set the text content
-  document.body.appendChild(overlay); // Add the overlay to the document body
-
-  // Set a timeout to remove the overlay from the DOM after 1.5 seconds
-  overlay._timeout = setTimeout(() => {
-    // Check if the overlay element still exists and is attached to the DOM before removing
-    if (overlay && overlay.parentNode) {
-      document.body.removeChild(overlay);
-    }
-    overlay = null; // Clear the reference to the overlay after removal
-  }, 1500); // 1.5 seconds (1500 milliseconds)
-}
-
-/**
- * Event listener for 'playing' event on media elements.
- * Ensures the media element has the current playback rate.
- * This function does NOT show the overlay anymore, as per user request.
- */
-function handleMediaPlaying(event) {
-  const media = event.target;
-  // Only apply speed if the extension is enabled for this site
-  if (isExtensionEnabledForSite && media.playbackRate !== currentSpeed) {
-    media.playbackRate = currentSpeed;
-  }
-}
-
-/**
- * Applies the given playback speed to all video and audio elements on the page.
- * Adds a 'playing' event listener to each to ensure speed is applied when media starts.
- * @param {number} speed The playback speed to apply.
- */
-function applySpeedToMedia(speed) {
-  // Select all video and audio elements and set their playback rate
-  document.querySelectorAll("video, audio").forEach(media => {
-    media.playbackRate = speed;
-    // Add 'playing' event listener only if it hasn't been added yet for this media element
-    if (!media._speedOverlayListenerAdded) {
-      media.addEventListener('playing', handleMediaPlaying);
-      media._speedOverlayListenerAdded = true; // Set a flag to prevent adding duplicate listeners
-    }
-  });
-}
-
-/**
- * Debounced function to re-apply the current speed to all media elements.
- * This prevents applying speed too frequently during rapid DOM changes
- * on dynamic websites like YouTube.
- */
-function applySpeedDebounced() {
-  if (applySpeedDebouncedTimeout) {
-    clearTimeout(applySpeedDebouncedTimeout);
-  }
-  // Set a timeout to apply speed after a short delay, allowing the DOM to settle
-  applySpeedDebouncedTimeout = setTimeout(() => {
-    // Only apply speed if the extension is currently enabled for this site.
-    // This is important for media that loads dynamically after initial page load.
-    if (isExtensionEnabledForSite) {
-      applySpeedToMedia(currentSpeed); // Re-apply the current speed to all media
-    }
-  }, 200); // 200ms delay for robustness
-}
-
-
-/**
- * Loads the saved playback speed for the current site from local storage
- * and applies it to media elements. Also checks for site disablement.
- */
-function loadSiteSpeed() {
-  const origin = location.origin; // Get the origin (protocol + hostname + port) of the current page
-  chrome.storage.local.get(['siteSpeeds', 'disabledSites'], ({ siteSpeeds, disabledSites }) => {
-    // Determine if the extension is disabled for the current site
-    const siteDisabled = disabledSites && disabledSites.includes(origin);
-    isExtensionEnabledForSite = !siteDisabled; // Update the global flag
-
-    if (siteDisabled) {
-      // If disabled, reset currentSpeed to 1.0 and ensure media plays normally
-      currentSpeed = 1.0;
-      applySpeedToMedia(currentSpeed); // Ensure speed is 1.0 if disabled
-      console.log(`Media Speed Controller: Disabled for ${origin}`);
-      // Do not show overlay on load if disabled.
-      return; // Stop further processing for this load
-    }
-
-    // If not disabled, proceed to load saved speed
-    if (siteSpeeds && siteSpeeds[origin]) {
-      currentSpeed = siteSpeeds[origin]; // Set current speed to the loaded speed
-    } else {
-      currentSpeed = 1.0; // Default to 1.0 if no speed is saved for this site
-    }
-    applySpeedToMedia(currentSpeed); // Apply speed, but don't show overlay here on initial load
-  });
-}
-
-/**
- * Saves the current playback speed for the current site to local storage.
- * @param {number} speed The speed to save.
- */
-function saveSiteSpeed(speed) {
-  const origin = location.origin; // Get the origin of the current page
-  chrome.storage.local.get(['siteSpeeds'], ({ siteSpeeds }) => {
-    if (!siteSpeeds) {
-      siteSpeeds = {}; // Initialize siteSpeeds if it doesn't exist
-    }
-    siteSpeeds[origin] = speed; // Store the current speed for the current origin
-    chrome.storage.local.set({ siteSpeeds }); // Save the updated siteSpeeds object to local storage
-  });
-}
-
-/**
- * Listener for messages from the background script (keyboard shortcuts)
- * and popup.js (UI interactions).
- */
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // If the extension is disabled for this site, only allow specific messages from popup.
-  // Other keyboard shortcuts should be ignored.
-  if (!isExtensionEnabledForSite && request.type !== "toggle-site-enablement-from-popup" && request.type !== "get-speed-status-from-popup") {
-    sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite }); // Always send response back to popup to update its UI with the current state (disabled)
-    return; // Ignore commands if disabled, unless it's a popup request for status or toggle.
-  }
-
-  // Handle messages from the popup (popup.js)
-  if (request.type === "get-speed-status-from-popup") {
-    // Send current speed and enablement status back to the popup
-    sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
-    return true; // Indicate that sendResponse will be called asynchronously
-  } else if (request.type === "toggle-site-enablement-from-popup") {
-    const origin = location.origin;
-    chrome.storage.local.get(['disabledSites'], ({ disabledSites }) => {
-      let updatedDisabledSites = disabledSites || [];
-      if (isExtensionEnabledForSite) { // Currently enabled, so disable it
-        updatedDisabledSites.push(origin);
-        isExtensionEnabledForSite = false;
-        currentSpeed = 1.0; // Reset speed when disabling
-        applySpeedToMedia(currentSpeed); // Immediately apply 1.0x
-        console.log(`Media Speed Controller: Disabled for ${origin}`);
-      } else { // Currently disabled, so enable it
-        updatedDisabledSites = updatedDisabledSites.filter(site => site !== origin);
-        isExtensionEnabledForSite = true;
-        // Re-load speed for this site (will apply saved or default)
-        // This implicitly calls applySpeedToMedia, so no need for an extra call here.
-        loadSiteSpeed();
-        console.log(`Media Speed Controller: Enabled for ${origin}`);
-      }
-      chrome.storage.local.set({ disabledSites: updatedDisabledSites }, () => {
-        // Send response back to popup to update its UI with the new state
-        sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
-      });
-    });
-    return true; // Indicate that sendResponse will be called asynchronously
-  }
-
-  // Handle messages for speed changes (from background script or popup buttons)
-  if (request.type === "increase-speed") {
-    currentSpeed = Math.min(currentSpeed + 0.25, 5.0);
-  } else if (request.type === "decrease-speed") {
-    currentSpeed = Math.max(currentSpeed - 0.25, 0.25);
-  } else if (request.type === "reset-speed") {
-    if (currentSpeed === 1.0 && lastSpeed !== 1.0) {
-      currentSpeed = lastSpeed;
-    } else {
-      lastSpeed = currentSpeed;
-      currentSpeed = 1.0;
-    }
-  } else {
-    sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite }); // Unknown request type, send current status
+function showOverlay(speed, isUserInitiated) {
+  // Only show overlay if this content script instance is in the top-level frame AND it's user initiated
+  if (!isUserInitiated || !isTopFrame) {
     return;
   }
 
-  // For increase/decrease/reset commands (keyboard or popup buttons):
-  applySpeedToMedia(currentSpeed);
-  showOverlay(currentSpeed); // ONLY show overlay when speed is *manually* changed
-  saveSiteSpeed(currentSpeed); // Speed is now saved automatically
+  // Clear any existing debounce timeout to reset the timer
+  if (showOverlayDebounceTimeout) {
+    clearTimeout(showOverlayDebounceTimeout);
+  }
 
-  // Send response back to popup for speed change commands
-  sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
-  return true; // Indicate that sendResponse will be called asynchronously
+  showOverlayDebounceTimeout = setTimeout(() => {
+    // If an overlay already exists and is still in the DOM, clear its removal timeout and update it.
+    if (overlay && overlay.parentNode) {
+      clearTimeout(overlay._timeout); // Clear the previous removal timeout
+      overlay.textContent = `${speed.toFixed(2)}x`; // Update text
+      overlay.style.opacity = '1'; // Ensure it's fully visible
+      // Reset its removal timer
+      overlay._timeout = setTimeout(() => {
+        if (overlay) {
+          overlay.style.opacity = '0'; // Start fade out
+          setTimeout(() => {
+            if (overlay && overlay.parentNode) {
+              document.body.removeChild(overlay);
+              overlay = null;
+            }
+          }, 100); // Match transition duration
+        }
+      }, 1500); // Display for 1.5 seconds
+      return; // Exit as overlay already exists and is updated
+    }
+
+    // Create the new overlay element if it doesn't exist
+    overlay = document.createElement('div');
+    overlay.style.position = 'fixed';
+    overlay.style.top = '80px';
+    overlay.style.left = '50px';
+    overlay.style.background = 'rgba(0, 0, 0, 0.7)';
+    overlay.style.color = 'white';
+    overlay.style.padding = '12px 18px';
+    overlay.style.fontSize = '24px';
+    overlay.style.fontWeight = 'bold';
+    overlay.style.borderRadius = '8px';
+    overlay.style.zIndex = '99999';
+    overlay.style.opacity = '0';
+    overlay.style.transition = 'opacity 0.1s ease-in-out';
+
+    overlay.textContent = `${speed.toFixed(2)}x`;
+
+    document.body.appendChild(overlay);
+    setTimeout(() => {
+      overlay.style.opacity = '1';
+    }, 10); // A very short delay to trigger CSS transition
+
+    // Set a timeout to fade out and remove the overlay after 1.5 seconds
+    overlay._timeout = setTimeout(() => {
+      if (overlay) {
+        overlay.style.opacity = '0'; // Start fade out
+        // Remove element after transition completes
+        setTimeout(() => {
+          if (overlay && overlay.parentNode) {
+            document.body.removeChild(overlay);
+            overlay = null;
+          }
+        }, 100); // Match transition duration
+      }
+    }, 1500); // Display for 1.5 seconds
+  }, 200); // Debounce delay: 50ms. Adjust if needed.
+}
+
+
+/**
+ * Finds all media elements (video and audio) on the page and applies the given speed.
+ * If in the top frame, it also sends messages to iframes.
+ * @param {number} speed The playback speed to apply.
+ * @param {boolean} [isUserInitiated=false] True if the speed change was initiated by user action.
+ */
+function applySpeed(speed, isUserInitiated = false) {
+    const mediaElements = document.querySelectorAll('video, audio');
+    mediaElements.forEach(media => {
+        media.playbackRate = speed;
+        if (speed === 0) {
+            media.pause();
+        }
+    });
+    currentSpeed = speed;
+
+    // Only show overlay if this is the top-level frame and user initiated
+    if (isTopFrame) {
+        showOverlay(speed, isUserInitiated);
+
+        // If in top frame, also send message to all iframes
+        try {
+            const iframes = document.querySelectorAll('iframe');
+            iframes.forEach(iframe => {
+                if (iframe.contentWindow) {
+                    iframe.contentWindow.postMessage({
+                        type: 'SPEEDSTER_SET_SPEED',
+                        speed: speed,
+                        isUserInitiated: isUserInitiated // Pass through, though iframes won't show overlay
+                    }, '*'); // Use '*' for targetOrigin for now, ideally restrict to known origins like 'https://www.youtube.com'
+                }
+            });
+        } catch (e) {
+            console.warn("SPEEDSTER: Could not post message to some iframes due to security restrictions:", e);
+        }
+    }
+}
+
+
+/**
+ * Debounces the applySpeed function to prevent excessive calls.
+ * This is useful for MutationObserver which can fire many times rapidly.
+ */
+function applySpeedDebounced() {
+    if (applySpeedDebouncedTimeout) {
+        clearTimeout(applySpeedDebouncedTimeout);
+    }
+    // Note: isUserInitiated is false for debounced calls, so overlay won't show
+    applySpeedDebouncedTimeout = setTimeout(() => {
+        applySpeed(currentSpeed, false);
+    }, 200); // Apply speed after 100ms of no further mutations
+}
+
+/**
+ * Loads the stored speed for the current site or initializes it.
+ * Only the top-level frame handles storage. Iframes receive speed via postMessage.
+ */
+function loadSiteSpeed() {
+    if (isTopFrame) {
+        chrome.storage.local.get([location.origin, 'isExtensionEnabledForSiteGlobally'], (result) => {
+            // Load global enablement flag first
+            if (typeof result.isExtensionEnabledForSiteGlobally !== 'undefined') {
+                isExtensionEnabledForSite = result.isExtensionEnabledForSiteGlobally;
+            } else {
+                // If global setting not found, initialize it as true
+                isExtensionEnabledForSite = true;
+                chrome.storage.local.set({ 'isExtensionEnabledForSiteGlobally': true });
+            }
+
+            // Load speed for the current site if extension is enabled
+            if (isExtensionEnabledForSite && result[location.origin]) {
+                currentSpeed = result[location.origin];
+            } else if (!isExtensionEnabledForSite) {
+                // If extension is disabled for the site, set speed to 0 and pause
+                currentSpeed = 0;
+            } else {
+                // Default to 1.0 if no stored speed for the site
+                currentSpeed = 1.0;
+            }
+            // Apply initial speed. isUserInitiated is false for initial load from storage.
+            applySpeed(currentSpeed, false);
+        });
+    } else {
+        // If in an iframe, do NOT load from storage.
+        // Assume default speed and await message from top frame.
+        currentSpeed = 1.0;
+        isExtensionEnabledForSite = true; // Assume enabled until told otherwise by top frame
+        applySpeed(currentSpeed, false); // Apply default speed initially within iframe
+    }
+}
+
+/**
+ * Saves the current speed for the current site to storage.
+ * Only the top-level frame handles storage.
+ */
+function saveSiteSpeed() {
+    if (isTopFrame) {
+        chrome.storage.local.set({ [location.origin]: currentSpeed });
+    }
+}
+
+/**
+ * Resets the speed to 1.0 or toggles between 1.0 and lastSpeed.
+ */
+function resetSpeed() {
+    if (!isExtensionEnabledForSite) {
+        return;
+    }
+    if (currentSpeed !== 1.0) {
+        lastSpeed = currentSpeed; // Store current speed before resetting
+        currentSpeed = 1.0;
+    } else if (lastSpeed !== 1.0) {
+        currentSpeed = lastSpeed; // Toggle back to last custom speed
+    }
+    applySpeed(currentSpeed, true); // User initiated
+    saveSiteSpeed(); // Only saves if isTopFrame
+}
+
+/**
+ * Adjusts the speed based on the command.
+ * @param {string} command 'increase-speed' or 'decrease-speed'.
+ */
+function adjustSpeed(command) {
+    if (!isExtensionEnabledForSite) {
+        // If extension is disabled for this site, do not adjust speed.
+        return;
+    }
+
+    let newSpeed = currentSpeed;
+    if (command === 'increase-speed') {
+        newSpeed += 0.25;
+        if (newSpeed > 16) newSpeed = 16; // Cap at 16x
+    } else if (command === 'decrease-speed') {
+        newSpeed -= 0.25;
+        if (newSpeed < 0) newSpeed = 0; // Don't go below 0
+    }
+
+    // Ensure floating point precision
+    newSpeed = parseFloat(newSpeed.toFixed(2));
+    applySpeed(newSpeed, true); // User initiated
+    saveSiteSpeed(); // Only saves if isTopFrame
+}
+
+// Listen for messages from the popup or background script
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // Determine if the sender is the popup based on sender.url
+    const popupUrl = chrome.runtime.getURL("popup.html");
+    const isFromPopup = sender.url && sender.url.startsWith(popupUrl);
+
+    switch (request.type) {
+        case 'increase-speed':
+        case 'decrease-speed':
+            adjustSpeed(request.type);
+            // ALWAYS send response for popup UI update
+            sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
+            break;
+        case 'reset-speed':
+            resetSpeed();
+            sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
+            break;
+        case 'get-speed-status-from-popup':
+            sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
+            return true;
+        case 'toggle-site-enablement-from-popup':
+            if (isTopFrame) {
+                isExtensionEnabledForSite = !isExtensionEnabledForSite;
+                currentSpeed = 1.0;
+                applySpeed(currentSpeed, true);
+                chrome.storage.local.set({
+                    'isExtensionEnabledForSiteGlobally': isExtensionEnabledForSite,
+                    [location.origin]: currentSpeed
+                }, () => {
+                    sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
+                });
+                return true;
+            } else {
+                sendResponse({ currentSpeed: currentSpeed, isEnabledForSite: isExtensionEnabledForSite });
+            }
+            break;
+    }
 });
+
+
+
+// Listener for messages from other frames (e.g., top frame sending speed to iframe)
+if (!isTopFrame) {
+    window.addEventListener('message', (event) => {
+        // IMPORTANT: Verify the origin of the message to prevent security vulnerabilities
+        // For YouTube embeds, the parent origin would be the site embedding it.
+        // A more robust check might involve checking event.origin against chrome.runtime.id for extension-sent messages
+        // For now, we'll assume the top frame's postMessage is trusted.
+
+        if (event.data && event.data.type === 'SPEEDSTER_SET_SPEED') {
+            const receivedSpeed = event.data.speed;
+            const receivedIsUserInitiated = event.data.isUserInitiated; // Though not used for overlay in iframe
+            console.log(`SPEEDSTER (iframe): Received speed ${receivedSpeed} from top frame.`);
+            // Apply the speed received from the top frame.
+            // isUserInitiated is false because this is an inherited speed change, not directly from user in iframe.
+            applySpeed(receivedSpeed, false);
+            // Since this is inherited, we don't save to storage from the iframe.
+        }
+    });
+}
 
 
 // Create a MutationObserver to detect changes in the DOM and URL (for SPAs like YouTube)
 const observer = new MutationObserver((mutations) => {
-  // Check if the URL has changed, which typically means a new page/video has loaded
-  if (location.href !== lastKnownUrl) {
+  // Only the top frame should manage URL changes for overall site speed
+  if (isTopFrame && location.href !== lastKnownUrl) {
     lastKnownUrl = location.href; // Update the last known URL
     loadSiteSpeed(); // This will load the speed for the new site/video and apply it
-  } else {
+  } else if (isExtensionEnabledForSite) {
     // If URL hasn't changed, but DOM mutations occurred (e.g., new video elements added,
     // or existing ones replaced/reset), re-apply the current speed.
-    // Only debounce and apply speed if the extension is enabled for this site.
-    if (isExtensionEnabledForSite) {
-      applySpeedDebounced();
-    }
+    // This applies to both top frame and iframes.
+    applySpeedDebounced();
   }
 });
 
 // Observe the entire document body for changes in its children and subtree.
-// This is crucial for dynamic sites like YouTube where elements are added/removed
-// or their attributes (like 'src' for video) are changed without a full page reload.
 observer.observe(document.body, { childList: true, subtree: true });
 
 // Initial load of site speed when the content script is first injected.
-// This handles the initial page load for the first video.
-// This call will set `currentSpeed` and `isExtensionEnabledForSite` and apply speed.
 loadSiteSpeed();
-
